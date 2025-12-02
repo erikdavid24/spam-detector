@@ -1,0 +1,6 @@
+# --- Mis reglas personalizadas ---
+data/
+*.zip
+*.csv
+# Si quieres subir el modelo entrenado, no pongas 'models/', 
+# pero si es muy pesado (más de 100MB), añádelo aquí también.

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Detector de Spam - Estilo Azrael</title>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    
+    <style>
+        body { font-family: sans-serif; padding: 10px; text-align: center; }
+        textarea { width: 80%; height: 100px; padding: 10px; font-size: 16px; margin-bottom: 10px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 5px;}
+        button:hover { background-color: #0056b3; }
+        #res { font-size: 24px; font-weight: bold; margin-top: 20px; color: #333; }
+    </style>
+</head>
+<body>
+
+    <h1>Detector de Spam </h1>
+    <p>Escribe tu correo abajo y presiona el botón.</p>
+
+    <script>
+        function clicked() {
+            console.log("clicked")
+            let data = document.getElementById("text").value // Usamos .value para textareas
+            
+            // Texto de carga
+            document.getElementById("res").textContent = "Analizando..."
+
+            $.ajax({ 
+                url: '/predict', 
+                type: 'GET', 
+                data: {'text': data},
+                success: function(response){ 
+                    document.getElementById("res").textContent = response 
+                },
+                error: function(error) {
+                    document.getElementById("res").textContent = "Error de conexión"
+                }
+            })
+        }
+    </script>
+
+    <textarea id="text" placeholder="Escribe aquí... (Ej: Ganaste un premio urgente)"></textarea>
+    <br>
+    <button onclick="clicked()">Analizar</button>
+    
+    <p id="res"></p>
+
+</body>
+</html>

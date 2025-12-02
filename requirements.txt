@@ -1,0 +1,16 @@
+# Core de Manipulación de Datos y Computación Numérica
+pandas>=2.1.4
+numpy>=1.26.2
+
+# Machine Learning y Clasificación de Texto (Scikit-learn)
+scikit-learn>=1.3.2
+
+# Preprocesamiento de texto (útil para Stop Words y Stemming)
+nltk>=3.8.1
+
+# Herramienta para trabajar con los notebooks (si planeas usarlos)
+jupyterlab>=4.0.10
+
+# Visualización de datos
+matplotlib>=3.8.2
+seaborn>=0.13.0
