@@ -2,5 +2,9 @@
 data/
 *.zip
 *.csv
+.env
+venv/
+__pycache__/
+*.pkl
 # Si quieres subir el modelo entrenado, no pongas 'models/', 
 # pero si es muy pesado (más de 100MB), añádelo aquí también.

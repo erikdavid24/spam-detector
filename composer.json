@@ -1,0 +1,5 @@
+{
+    "require": {
+        "webklex/laravel-imap": "^6.2"
+    }
+}

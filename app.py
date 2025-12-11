@@ -1,88 +1,196 @@
-import flask
-from flask import Flask, request, render_template
-import pandas as pd
-import joblib
+from flask import Flask, render_template, redirect, url_for, request, jsonify
+from flask_socketio import SocketIO, emit
+from src.leer_correos import obtener_correos
+from src.reentrenar import entrenar_sistema
 import os
-from deep_translator import GoogleTranslator
+import json
+import time
+import re # <--- Para buscar el @dominio.com
+from threading import Thread
+from collections import Counter
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'tu_clave_secreta_proy_escolar'
 
-# --- CARGA DE RECURSOS (MODELO Y VOCABULARIO) ---
-print("🔄 Cargando modelo y vocabulario...")
+socketio = SocketIO(app, cors_allowed_origins="*")
 
-# 1. Cargar tu modelo entrenado
-ruta_modelo = '../models/modelo_spam_entrenado.pkl'
-# Ajuste de ruta: si ejecutas desde la carpeta raíz del proyecto, usa 'models/...'
-if not os.path.exists(ruta_modelo):
-    ruta_modelo = 'models/modelo_spam_entrenado.pkl'
+# --- MEMORIA CACHÉ ---
+cache_correos = {
+    'inbox': [],
+    'spam': []
+}
 
-if os.path.exists(ruta_modelo):
-    model = joblib.load(ruta_modelo)
-    print("✅ Modelo cargado.")
-else:
-    print("❌ ERROR: No encuentro el archivo .pkl")
+def calcular_estadisticas():
+    inbox = cache_correos['inbox']
+    spam = cache_correos['spam']
+    
+    total = len(inbox) + len(spam)
+    if total == 0: return None
 
-# 2. Cargar el vocabulario desde tu CSV (emails.csv)
-# Ajuste de ruta para que funcione tanto en notebooks como en la raíz
-rutas_posibles = [
-    r"c:\Users\eriko\Spam_Classifier_Project\data\raw\email-spam-classification-dataset-csv\emails.csv",
-    "data/raw/email-spam-classification-dataset-csv/emails.csv"
-]
-ruta_datos = None
-for r in rutas_posibles:
-    if os.path.exists(r):
-        ruta_datos = r
-        break
+    # 1. Datos para gráfica de Dona (Porcentajes)
+    porc_spam = round((len(spam) / total) * 100, 1)
+    porc_inbox = round((len(inbox) / total) * 100, 1)
 
-columnas_palabras = []
-if ruta_datos:
-    # Leemos solo 1 fila para sacar los nombres de columnas rápido
-    df_ref = pd.read_csv(ruta_datos, nrows=1)
-    columnas_palabras = df_ref.drop(columns=['Email No.', 'Prediction']).columns
-    print(f"✅ Vocabulario cargado ({len(columnas_palabras)} palabras).")
-else:
-    print("❌ ERROR CRÍTICO: No encuentro 'emails.csv' para leer el vocabulario.")
+    # 2. Datos para gráfica de Barras (Palabras top en Spam)
+    # Juntamos todos los asuntos de spam en un solo texto gigante
+    texto_spam = " ".join([email['asunto'] for email in spam]).lower()
+    # Quitamos palabras aburridas (stopwords básicas)
+    palabras_ignoradas = ['de', 'la', 'el', 'en', 'y', 'a', 'que', 'los', 'del', 'se', 'por', 'un', 'una', 'su', 'para', 'con', 'no', 'si']
+    palabras = [p for p in texto_spam.split() if len(p) > 3 and p not in palabras_ignoradas]
+    
+    # Contamos las 5 más comunes
+    top_palabras = Counter(palabras).most_common(5)
+    
+    return {
+        'resumen': [len(inbox), len(spam)],
+        'top_palabras': [x[0] for x in top_palabras],
+        'conteo_palabras': [x[1] for x in top_palabras]
+    }
 
-# --- LÓGICA DE CLASIFICACIÓN (Tu cerebro de IA) ---
-def classify(text):
-    try:
-        # 1. Traducir (Español -> Inglés)
-        traductor = GoogleTranslator(source='auto', target='en')
-        mensaje_ingles = traductor.translate(text)
-        print(f"Texto traducido: {mensaje_ingles}")
+@app.route('/api/stats')
+def api_stats():
+    stats = calcular_estadisticas()
+    return jsonify(stats)
 
-        # 2. Convertir texto a números (Bag of Words)
-        datos_entrada = pd.DataFrame(0, index=[0], columns=columnas_palabras)
-        palabras = mensaje_ingles.lower().split()
-        
-        for palabra in palabras:
-            if palabra in datos_entrada.columns:
-                datos_entrada.loc[0, palabra] += 1
-        
-        # 3. Predecir
-        prediccion = model.predict(datos_entrada)[0]
-        
-        if prediccion == 1:
-            return "¡CUIDADO! Es SPAM 🛑"
-        else:
-            return "Es Correo Seguro ✅"
+hilo_gmail = None
+
+def vigilar_gmail():
+    global cache_correos
+    print("🕵️‍♂️ Vigilante de Gmail iniciado...")
+    while True:
+        try:
+            todos = obtener_correos()
+            nuevos_inbox = [e for e in todos if not e['es_spam']]
+            nuevos_spam = [e for e in todos if e['es_spam']]
             
-    except Exception as e:
-        print(f"Error: {e}")
-        return "Error en el servidor"
+            cache_correos['inbox'] = nuevos_inbox
+            cache_correos['spam'] = nuevos_spam
+            
+            socketio.emit('actualizacion_inbox', nuevos_inbox)
+            socketio.emit('actualizacion_spam', nuevos_spam)
+            socketio.sleep(10)
+        except Exception as e:
+            print(f"⚠️ Error en vigilante: {e}")
+            socketio.sleep(10)
 
-# --- RUTAS DE FLASK (Igual que Azrael05) ---
+#Helper para extraer dominio (ej: "amazon.com" de "ventas@amazon.com")
+def extraer_dominio(remitente):
+    try:
+        # Busca lo que hay después del @ y antes del cierre > o espacio
+        # Ej: "Erik <erik@google.com>" -> "google.com"
+        match = re.search(r"@([\w\.-]+)", remitente)
+        if match:
+            return match.group(1).lower()
+    except:
+        pass
+    return None
 
+# --- RUTAS WEB ---
 @app.route('/')
-def index():
-    return render_template('index.html')
+def inicio():
+    return redirect(url_for('inbox'))
 
-@app.route("/predict")
-def inference():
-    # Azrael usa GET y 'text' como parámetro
-    text = str(request.args.get('text'))
-    result = classify(text)
-    return result
+@app.route('/inbox')
+def inbox():
+    return render_template('gmail_style.html', pagina_actual='inbox', emails=cache_correos['inbox'])
 
-if __name__ == "__main__":
-    app.run(debug=True)
+@app.route('/spam')
+def spam():
+    return render_template('gmail_style.html', pagina_actual='spam', emails=cache_correos['spam'])
+
+@app.route('/api/obtener_emails')
+def api_emails():
+    tipo = request.args.get('tipo', 'inbox')
+    return jsonify(cache_correos[tipo])
+
+# --- RUTAS DE CORRECCIÓN (AQUÍ ESTÁ LA MAGIA NUEVA) ---
+@app.route('/corregir_lote', methods=['POST'])
+def corregir_lote():
+    asuntos = request.form.getlist('asuntos')
+    etiqueta = request.form['etiqueta_correcta'] # '0' (No es Spam) o '1' (Es Spam)
+    
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # 1. ACTUALIZAR CORRECCIONES MANUALES (JSON)
+    ruta_correcciones = os.path.join(base_dir, 'data', 'correcciones.json')
+    try:
+        with open(ruta_correcciones, 'r', encoding='utf-8') as f:
+            correcciones = json.load(f)
+    except: correcciones = {}
+    
+    for asunto in asuntos:
+        correcciones[asunto] = int(etiqueta)
+    
+    with open(ruta_correcciones, 'w', encoding='utf-8') as f:
+        json.dump(correcciones, f, indent=4)
+    
+    # 2. INTELIGENCIA DE DOMINIOS (WHITELIST AUTOMÁTICA)
+    # Si el usuario dijo "NO ES SPAM" ('0'), confiamos en el dominio
+    if etiqueta == '0':
+        print("🛡️ Aprendiendo nuevos dominios confiables...")
+        ruta_whitelist = os.path.join(base_dir, 'data', 'whitelist.json')
+        
+        try:
+            with open(ruta_whitelist, 'r', encoding='utf-8') as f:
+                whitelist = json.load(f)
+        except: whitelist = []
+
+        # Buscamos el remitente original en nuestra caché (porque el form solo mandó el asunto)
+        # Buscamos en la carpeta de SPAM porque de ahí los estamos sacando
+        correos_en_spam = cache_correos['spam']
+        
+        nuevos_dominios = []
+        for asunto in asuntos:
+            # Buscamos el correo que tenga ese asunto
+            email_obj = next((e for e in correos_en_spam if e['asunto'] == asunto), None)
+            
+            if email_obj:
+                dominio = extraer_dominio(email_obj['remitente'])
+                if dominio and dominio not in whitelist:
+                    whitelist.append(dominio)
+                    nuevos_dominios.append(dominio)
+        
+        # Guardamos la nueva Whitelist
+        if nuevos_dominios:
+            with open(ruta_whitelist, 'w', encoding='utf-8') as f:
+                json.dump(whitelist, f, indent=4)
+            print(f"✅ Dominios agregados a lista segura: {nuevos_dominios}")
+
+    # 3. RE-ENTRENAR MODELO
+    entrenar_sistema()
+
+    # 4. ACTUALIZAR RÁPIDO
+    socketio.start_background_task(vigilar_gmail_una_vez)
+
+    if etiqueta == '0': return redirect(url_for('inbox'))
+    else: return redirect(url_for('spam'))
+
+def vigilar_gmail_una_vez():
+    socketio.sleep(1)
+    # Forzamos una lectura inmediata para actualizar la UI
+    with app.app_context():
+        try:
+            todos = obtener_correos()
+            cache_correos['inbox'] = [e for e in todos if not e['es_spam']]
+            cache_correos['spam'] = [e for e in todos if e['es_spam']]
+            socketio.emit('actualizacion_inbox', cache_correos['inbox'])
+            socketio.emit('actualizacion_spam', cache_correos['spam'])
+        except: pass
+
+@socketio.on('connect')
+def test_connect():
+    global hilo_gmail
+    if hilo_gmail is None:
+        hilo_gmail = socketio.start_background_task(vigilar_gmail)
+
+if __name__ == '__main__':
+    print("🚀 Servidor Arrancando...")
+    try:
+        todos = obtener_correos()
+        cache_correos['inbox'] = [e for e in todos if not e['es_spam']]
+        cache_correos['spam'] = [e for e in todos if e['es_spam']]
+        print("✅ Caché lista.")
+    except:
+        print("⚠️ Caché vacía al inicio.")
+
+    socketio.run(app, debug=True, allow_unsafe_werkzeug=True)

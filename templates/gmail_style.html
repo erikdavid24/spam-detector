@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gmail AI - Dashboard</title>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; display: flex; height: 100vh; background-color: #f6f8fc; }
+        .sidebar { width: 256px; background-color: #f6f8fc; padding-top: 10px; display: flex; flex-direction: column; }
+        .logo { padding: 10px 20px; font-size: 22px; color: #444; display: flex; align-items: center; gap: 10px; }
+        .compose-btn { margin: 15px; width: 140px; height: 50px; border-radius: 25px; background-color: #c2e7ff; border: none; font-size: 14px; color: #001d35; display: flex; align-items: center; justify-content: center; gap: 10px; cursor: pointer; font-weight: bold; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .menu-item { display: flex; align-items: center; padding: 0 26px; height: 32px; color: #202124; text-decoration: none; font-size: 14px; border-radius: 0 16px 16px 0; margin-right: 10px; cursor: pointer; }
+        .menu-item:hover { background-color: #eabdbd38; }
+        .menu-item.active { background-color: #d3e3fd; color: #001d35; font-weight: bold; }
+        .menu-item .material-icons { margin-right: 18px; font-size: 20px; }
+        .main { flex-grow: 1; background-color: white; margin: 10px 10px 10px 0; border-radius: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); overflow: hidden; display: flex; flex-direction: column; }
+        .toolbar { padding: 10px 20px; border-bottom: 1px solid #f2f2f2; display: flex; align-items: center; height: 40px; background-color: #fff; }
+        .action-btn { padding: 8px 16px; border-radius: 4px; border: none; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 5px; font-size: 14px; transition: 0.2s; }
+        .btn-spam { background-color: #fce8e6; color: #c5221f; }
+        .btn-ham { background-color: #e6f4ea; color: #137333; }
+        .email-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; }
+        .email-item { display: flex; align-items: center; padding: 10px 20px; border-bottom: 1px solid #f2f2f2; transition: background 0.2s; cursor: pointer; }
+        .email-item:hover { box-shadow: inset 1px 0 0 #dadce0, inset -1px 0 0 #dadce0, 0 1px 2px 0 rgba(60,64,67,.3); z-index: 1; background-color: #f2f2f2; }
+        .custom-checkbox { width: 18px; height: 18px; margin-right: 15px; cursor: pointer; z-index: 2; }
+        .sender { width: 200px; font-weight: bold; color: #202124; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+        .subject { flex-grow: 1; color: #202124; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+        .preview { color: #5f6368; }
+        .badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; margin-left: 10px; font-weight: bold; }
+        .badge-spam { background-color: #fce8e6; color: #c5221f; }
+        .badge-ham { background-color: #e6f4ea; color: #137333; }
+        .live-indicator { width: 8px; height: 8px; background-color: #137333; border-radius: 50%; display: inline-block; margin-right: 5px; box-shadow: 0 0 0 0 rgba(19, 115, 51, 0.7); animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(19, 115, 51, 0.7); } 70% { transform: scale(1); box-shadow: 0 0 0 4px rgba(19, 115, 51, 0); } 100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(19, 115, 51, 0); } }
+
+        /* MODAL */
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
+        .modal-content { background-color: white; width: 80%; max-width: 800px; height: 80%; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); display: flex; flex-direction: column; overflow: hidden; animation: slideUp 0.3s ease-out; }
+        .modal-header { padding: 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: start; background: #f8f9fa;}
+        .modal-title { font-size: 20px; font-weight: bold; color: #202124; margin-bottom: 5px; }
+        .modal-sender { font-size: 14px; color: #5f6368; }
+        .close-btn { cursor: pointer; color: #5f6368; font-size: 24px; }
+        .modal-body { padding: 30px; overflow-y: auto; white-space: pre-wrap; line-height: 1.6; color: #202124; font-size: 15px; }
+
+        /* ESTILOS GRÁFICAS */
+        .charts-container { display: flex; gap: 20px; padding: 20px; height: 100%; }
+        .chart-box { flex: 1; padding: 20px; border: 1px solid #eee; border-radius: 8px; display: flex; flex-direction: column; align-items: center; }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <div class="logo"><span class="material-icons" style="color:#d93025;">mail</span> Gmail AI</div>
+        <a href="/inbox" class="menu-item {{ 'active' if pagina_actual == 'inbox' }}">
+            <span class="material-icons">inbox</span> Recibidos
+        </a>
+        <a href="/spam" class="menu-item {{ 'active' if pagina_actual == 'spam' }}">
+            <span class="material-icons">report</span> Spam
+        </a>
+        <div class="menu-item" onclick="abrirStats()">
+            <span class="material-icons" style="color: #5f6368;">bar_chart</span> Estadísticas
+        </div>
+    </div>
+
+    <div class="main">
+        <form action="/corregir_lote" method="POST" style="height: 100%; display: flex; flex-direction: column;">
+            <div class="toolbar">
+                <span class="material-icons" style="color: #5f6368; margin-right: 20px;">check_box_outline_blank</span>
+                {% if pagina_actual == 'inbox' %}
+                    <input type="hidden" name="etiqueta_correcta" value="1">
+                    <button type="submit" class="action-btn btn-spam" onclick="event.stopPropagation()">
+                        <span class="material-icons">report_problem</span> Marcar como Spam
+                    </button>
+                {% else %}
+                    <input type="hidden" name="etiqueta_correcta" value="0">
+                    <button type="submit" class="action-btn btn-ham" onclick="event.stopPropagation()">
+                        <span class="material-icons">check_circle</span> No es Spam
+                    </button>
+                {% endif %}
+                <span class="status-indicator" style="margin-left: auto; color: #137333; font-size: 11px; font-weight: bold; display: flex; align-items: center;">
+                    <div class="live-indicator"></div> En Vivo
+                </span>
+            </div>
+
+            <ul class="email-list" id="lista-correos">
+                {% if emails %}
+                    {% for email in emails %}
+                    <li class="email-item" onclick='abrirCorreo(this)'>
+                        <div class="data-store" style="display:none;" data-asunto="{{ email.asunto }}" data-remitente="{{ email.remitente }}" data-cuerpo="{{ email.cuerpo_completo }}"></div>
+                        <input type="checkbox" name="asuntos" value="{{ email.asunto }}" class="custom-checkbox" onclick="event.stopPropagation()">
+                        <span class="material-icons" style="color: #dadce0; margin-right: 10px;">star_border</span>
+                        <div class="sender">{{ email.remitente }}</div>
+                        <div class="subject">{{ email.asunto }} <span class="preview">- {{ email.resumen }}</span></div>
+                        <span class="badge {{ 'badge-spam' if email.es_spam else 'badge-ham' }}">{{ 'SPAM' if email.es_spam else 'SEGURO' }}</span>
+                    </li>
+                    {% endfor %}
+                {% else %}
+                    <div style="text-align:center; padding:50px; color:#888;"><span class="material-icons" style="font-size:48px">sync</span><br>Sincronizando...</div>
+                {% endif %}
+            </ul>
+        </form>
+    </div>
+
+    <div class="modal-overlay" id="emailModal" onclick="cerrarModal('emailModal')">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div><div class="modal-title" id="modalSubject"></div><div class="modal-sender" id="modalSender"></div></div>
+                <span class="material-icons close-btn" onclick="cerrarModal('emailModal')">close</span>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="statsModal" onclick="cerrarModal('statsModal')">
+        <div class="modal-content" onclick="event.stopPropagation()" style="height: 600px;">
+            <div class="modal-header">
+                <div class="modal-title">📊 Reporte de Rendimiento de IA</div>
+                <span class="material-icons close-btn" onclick="cerrarModal('statsModal')">close</span>
+            </div>
+            <div class="modal-body" style="background: #f8f9fa;">
+                <div class="charts-container">
+                    <div class="chart-box">
+                        <h3>Distribución de Correo</h3>
+                        <canvas id="pieChart"></canvas>
+                    </div>
+                    <div class="chart-box">
+                        <h3>Palabras más usadas en Spam</h3>
+                        <canvas id="barChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const paginaTipo = "{{ pagina_actual }}"; 
+        const socket = io();
+
+        socket.on('connect', () => { document.querySelector('.live-indicator').style.backgroundColor = "#137333"; });
+        socket.on('disconnect', () => { document.querySelector('.live-indicator').style.backgroundColor = "#c5221f"; });
+        const eventoEscuchar = paginaTipo === 'inbox' ? 'actualizacion_inbox' : 'actualizacion_spam';
+        socket.on(eventoEscuchar, (correos) => { actualizarLista(correos); });
+
+        function actualizarLista(correos) {
+            const lista = document.getElementById('lista-correos');
+            let htmlContent = ''; 
+            if (correos.length === 0) {
+                htmlContent = `<div style="text-align:center; padding:50px; color:#888;"><span class="material-icons" style="font-size:48px">done_all</span><br>Todo limpio</div>`;
+            } else {
+                correos.forEach(email => {
+                    const badgeClass = email.es_spam ? 'badge-spam' : 'badge-ham';
+                    const badgeText = email.es_spam ? 'SPAM' : 'SEGURO';
+                    const asuntoSafe = email.asunto.replace(/"/g, '&quot;');
+                    const remitenteSafe = email.remitente.replace(/"/g, '&quot;');
+                    const cuerpoSafe = encodeURIComponent(email.cuerpo_completo);
+                    htmlContent += `
+                    <li class="email-item" onclick="abrirCorreoDesdeJS('${asuntoSafe}', '${remitenteSafe}', '${cuerpoSafe}')">
+                        <input type="checkbox" name="asuntos" value="${asuntoSafe}" class="custom-checkbox" onclick="event.stopPropagation()">
+                        <span class="material-icons" style="color: #dadce0; margin-right: 10px;">star_border</span>
+                        <div class="sender">${email.remitente}</div>
+                        <div class="subject">${email.asunto} <span class="preview">- ${email.resumen}</span></div>
+                        <span class="badge ${badgeClass}">${badgeText}</span>
+                    </li>`;
+                });
+            }
+            lista.innerHTML = htmlContent;
+        }
+
+        // --- LÓGICA DE MODALES ---
+        function abrirCorreo(elementoLi) {
+            const dataDiv = elementoLi.querySelector('.data-store');
+            mostrarModal(dataDiv.getAttribute('data-asunto'), dataDiv.getAttribute('data-remitente'), dataDiv.getAttribute('data-cuerpo'));
+        }
+        function abrirCorreoDesdeJS(asunto, remitente, cuerpoCodificado) {
+            mostrarModal(asunto, remitente, decodeURIComponent(cuerpoCodificado));
+        }
+        function mostrarModal(asunto, remitente, cuerpo) {
+            document.getElementById('modalSubject').innerText = asunto;
+            document.getElementById('modalSender').innerText = remitente;
+            document.getElementById('modalBody').innerText = cuerpo;
+            document.getElementById('emailModal').style.display = 'flex';
+        }
+        function cerrarModal(id) {
+            document.getElementById(id).style.display = 'none';
+        }
+
+        // --- LÓGICA DE GRÁFICAS ---
+        let miPieChart = null;
+        let miBarChart = null;
+
+        async function abrirStats() {
+            document.getElementById('statsModal').style.display = 'flex';
+            
+            // Pedimos los datos al servidor
+            const res = await fetch('/api/stats');
+            const data = await res.json();
+            
+            if (!data) return;
+
+            // Destruir gráficas viejas si existen
+            if (miPieChart) miPieChart.destroy();
+            if (miBarChart) miBarChart.destroy();
+
+            // 1. Gráfica de Dona (Inbox vs Spam)
+            const ctxPie = document.getElementById('pieChart').getContext('2d');
+            miPieChart = new Chart(ctxPie, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Seguros', 'Spam'],
+                    datasets: [{
+                        data: data.resumen,
+                        backgroundColor: ['#28a745', '#dc3545']
+                    }]
+                }
+            });
+
+            // 2. Gráfica de Barras (Palabras comunes)
+            const ctxBar = document.getElementById('barChart').getContext('2d');
+            miBarChart = new Chart(ctxBar, {
+                type: 'bar',
+                data: {
+                    labels: data.top_palabras,
+                    datasets: [{
+                        label: 'Frecuencia',
+                        data: data.conteo_palabras,
+                        backgroundColor: '#007bff'
+                    }]
+                }
+            });
+        }
+    </script>
+</body>
+</html>
